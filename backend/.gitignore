@@ -1,0 +1,11 @@
+# Prisma
+/prisma/migrations/
+/prisma/*.db
+/prisma/*.db-journal
+
+# Temporary Uploads
+uploads/
+temp/
+
+# TypeScript
+tsconfig.tsbuildinfo
