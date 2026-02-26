@@ -1,11 +1,15 @@
-# Prisma
+# Backend Secrets
+.env
+
+# Prisma specific
 /prisma/migrations/
-/prisma/*.db
-/prisma/*.db-journal
+/prisma/schema.prisma.bak
 
-# Temporary Uploads
-uploads/
-temp/
+# Build output
+/dist
+/build
 
-# TypeScript
-tsconfig.tsbuildinfo
+# Logs and temp files
+logs/
+*.log
+npm-debug.log*
