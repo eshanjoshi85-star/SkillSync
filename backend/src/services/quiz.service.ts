@@ -90,7 +90,7 @@ export async function generateQuizQuestions(
         throw new Error("At least one skill must be selected.");
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const allQuestions: QuizQuestion[] = [];
     let questionCounter = 1;
 
