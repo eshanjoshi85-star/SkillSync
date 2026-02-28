@@ -2,18 +2,27 @@ import { createRequire } from "module";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "../lib/prisma";
 
-// createRequire + __filename: loads CommonJS packages (like pdf-parse) safely.
-// __filename is always defined in CJS output produced by tsc (module: commonjs).
-// This is the correct approach for a TypeScript/CommonJS project on Render.
-const _cjsRequire = createRequire(__filename);
+// Use createRequire(import.meta.url) for ESM-safe CJS loading on Render.
+// @ts-ignore – import.meta.url is valid at runtime on Render's Node ESM environment
+const _cjsRequire = createRequire(import.meta.url);
+
+type PdfParseFn = (buf: Buffer) => Promise<{ text?: string }>;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _pdfParseRaw: any = _cjsRequire("pdf-parse");
 
-// Guard against CJS interop wrapping the function under .default
-const pdfParse: (buf: Buffer) => Promise<{ text: string }> =
-    typeof _pdfParseRaw === "function" ? _pdfParseRaw : _pdfParseRaw?.default;
-
+// Resolve pdf-parse callable across CJS/ESM/bundler export shapes:
+// tries module itself, then .default, .pdfParse, .parse
+const pdfParse: PdfParseFn | undefined =
+    typeof _pdfParseRaw === "function"
+        ? (_pdfParseRaw as PdfParseFn)
+        : typeof _pdfParseRaw?.default === "function"
+            ? (_pdfParseRaw.default as PdfParseFn)
+            : typeof _pdfParseRaw?.pdfParse === "function"
+                ? (_pdfParseRaw.pdfParse as PdfParseFn)
+                : typeof _pdfParseRaw?.parse === "function"
+                    ? (_pdfParseRaw.parse as PdfParseFn)
+                    : undefined;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -33,12 +42,19 @@ export interface GeneratedQuiz {
 
 /** Extract plain text from a PDF buffer using pdf-parse */
 export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
-    if (!pdfParse || typeof pdfParse !== "function") {
-        throw new Error("pdf-parse is not loaded correctly – check the install");
+    if (typeof pdfParse !== "function") {
+        // Log the actual export shape so Render logs reveal the right key
+        console.error("pdf-parse export shape:", {
+            type: typeof _pdfParseRaw,
+            keys: _pdfParseRaw ? Object.keys(_pdfParseRaw) : null,
+            hasDefault: !!_pdfParseRaw?.default,
+            defaultType: typeof _pdfParseRaw?.default,
+        });
+        throw new Error("pdf-parse failed to load on server runtime");
     }
     try {
         const data = await pdfParse(dataBuffer);
-        return data?.text?.trim() ?? "";
+        return (data?.text ?? "").trim();
     } catch (err) {
         console.error("pdf-parse error:", err);
         throw new Error("Failed to parse PDF. Please upload a valid, non-encrypted PDF file.");
