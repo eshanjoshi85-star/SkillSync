@@ -78,9 +78,45 @@ export async function extractTextFromResume(dataBuffer: Buffer): Promise<string>
 
 
 
+
+function sleep(ms: number) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+function extractRetryDelayMs(err: any): number | null {
+    const details = err?.errorDetails ?? err?.details ?? err?.response?.data?.error?.details;
+    const asText = JSON.stringify(details ?? {});
+    const m = asText.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
+    if (m) return Number(m[1]) * 1000;
+    return null;
+}
+
+async function geminiGenerateWithRetry(
+    model: ReturnType<typeof genAI.getGenerativeModel>,
+    prompt: string,
+    maxRetries = 2
+) {
+    let attempt = 0;
+    while (true) {
+        try {
+            return await model.generateContent(prompt);
+        } catch (err: any) {
+            const status = err?.status ?? err?.response?.status;
+            if (status === 429 && attempt < maxRetries) {
+                const retryMs = extractRetryDelayMs(err) ?? (2 ** attempt) * 2000;
+                console.warn(`Gemini 429 hit. Retrying in ${Math.ceil(retryMs / 1000)}s... (attempt ${attempt + 1}/${maxRetries})`);
+                await sleep(retryMs);
+                attempt++;
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+
 /**
- * Generate quiz questions for any non-empty set of skills.
- * Each skill gets 5 questions (3 Medium + 2 Hard).
+ * Generate quiz questions for all selected skills in ONE Gemini call.
+ * 5 questions per skill (3 Medium + 2 Hard). Max 3 skills by default (free tier safe).
  */
 export async function generateQuizQuestions(
     skills: string[],
@@ -90,22 +126,30 @@ export async function generateQuizQuestions(
         throw new Error("At least one skill must be selected.");
     }
 
+    const MAX_SKILLS = Number(process.env.QUIZ_MAX_SKILLS ?? 3);
+    if (skills.length > MAX_SKILLS) {
+        throw new Error(`Please select up to ${MAX_SKILLS} skills to generate the quiz.`);
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    const allQuestions: QuizQuestion[] = [];
-    let questionCounter = 1;
+    const totalQuestions = skills.length * 5;
 
-    for (const skill of skills) {
-        const prompt = `You are an expert technical assessor for the skill: "${skill}".
+    const prompt = `You are an expert technical assessor.
 
-Generate 5 multiple-choice questions:
-- 3 questions at MEDIUM difficulty
-- 2 questions at HARD difficulty
-${resumeText ? `\nResume context (use to personalise questions):\n"""\n${resumeText.slice(0, 2000)}\n"""\n` : ""}
-Return ONLY a valid JSON array (no markdown, no explanation) with this exact structure:
+Generate a quiz for these skills:
+${JSON.stringify(skills)}
+
+Generate EXACTLY 5 questions per skill:
+- 3 MEDIUM difficulty
+- 2 HARD difficulty
+
+${resumeText ? `Resume context (use lightly to personalize examples):\n"""\n${resumeText.slice(0, 2000)}\n"""\n` : ""}
+Return ONLY valid JSON (no markdown, no explanation) as an array with EXACTLY ${totalQuestions} items:
 [
   {
+    "skill": "React",
     "question": "...",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "options": ["Option A","Option B","Option C","Option D"],
     "correctIndex": 0,
     "difficulty": "MEDIUM"
   }
@@ -113,36 +157,41 @@ Return ONLY a valid JSON array (no markdown, no explanation) with this exact str
 
 Rules:
 - Each question must have exactly 4 options
-- correctIndex is 0-based
-- Questions should test practical knowledge of "${skill}"
+- correctIndex is 0-based (0..3)
+- difficulty must be "MEDIUM" or "HARD"
+- Each item MUST include "skill" matching one of the provided skills exactly
 - Vary the correct answer positions
 - Do not add any text outside the JSON array`;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text().trim();
+    const result = await geminiGenerateWithRetry(model, prompt, 2);
+    const text = result.response.text().trim();
 
-        const jsonStr = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-        const parsed: Array<{
-            question: string;
-            options: string[];
-            correctIndex: number;
-            difficulty: "MEDIUM" | "HARD";
-        }> = JSON.parse(jsonStr);
+    const jsonStr = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const parsed: Array<{
+        skill: string;
+        question: string;
+        options: string[];
+        correctIndex: number;
+        difficulty: "MEDIUM" | "HARD";
+    }> = JSON.parse(jsonStr);
 
-        for (const q of parsed) {
-            allQuestions.push({
-                id: `q${questionCounter++}`,
-                question: q.question,
-                options: q.options,
-                correctIndex: q.correctIndex,
-                difficulty: q.difficulty,
-                skill,
-            });
-        }
+    if (!Array.isArray(parsed) || parsed.length !== totalQuestions) {
+        throw new Error(
+            `AI returned invalid quiz payload. Expected ${totalQuestions} questions, got ${Array.isArray(parsed) ? parsed.length : "non-array"}.`
+        );
     }
 
-    return allQuestions;
+    let questionCounter = 1;
+    return parsed.map((q) => ({
+        id: `q${questionCounter++}`,
+        question: q.question,
+        options: q.options,
+        correctIndex: q.correctIndex,
+        difficulty: q.difficulty,
+        skill: q.skill,
+    }));
 }
+
 
 /** Score a submitted quiz and persist the attempt.
  *  Hard-mode bonus: 2+ skills selected + passed ≥ 60% → awards +2 tokens.

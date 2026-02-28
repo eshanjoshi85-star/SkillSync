@@ -74,6 +74,12 @@ router.post(
                 return;
             }
 
+            const MAX_SKILLS = Number(process.env.QUIZ_MAX_SKILLS ?? 3);
+            if (validSkills.length > MAX_SKILLS) {
+                res.status(400).json({ error: `Please select up to ${MAX_SKILLS} skills to generate the quiz.` });
+                return;
+            }
+
             const questions = await generateQuizQuestions(validSkills);
             res.json({ questions, skills: validSkills });
         } catch (err: any) {
@@ -82,6 +88,7 @@ router.post(
         }
     }
 );
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/submit

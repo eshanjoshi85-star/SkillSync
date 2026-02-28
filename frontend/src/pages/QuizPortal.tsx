@@ -73,13 +73,17 @@ export default function QuizPortal() {
         if (blocked && unlocksAt) setStep('blocked');
     }, []);
 
+    const MAX_SKILLS = 3;
+
     const toggleSkill = (skill: string) => {
-        setSelectedSkills(prev =>
-            prev.includes(skill) ? prev.filter(s => s !== skill) : [...prev, skill]
-        );
+        setSelectedSkills(prev => {
+            if (prev.includes(skill)) return prev.filter(s => s !== skill);
+            if (prev.length >= MAX_SKILLS) return prev; // silently cap at 3
+            return [...prev, skill];
+        });
     };
 
-    const selectAll = () => setSelectedSkills([...extractedSkills]);
+    const selectAll = () => setSelectedSkills(extractedSkills.slice(0, MAX_SKILLS));
     const clearAll = () => setSelectedSkills([]);
 
     // Effective skills: from checkboxes OR from manual comma-input fallback
@@ -318,7 +322,7 @@ export default function QuizPortal() {
                                 <>
                                     <p className="quiz-card-subtitle">
                                         ✅ {extractedSkills.length} skill{extractedSkills.length > 1 ? 's' : ''} detected in your resume.
-                                        Select which ones to test (5 questions per skill).
+                                        Pick up to <strong>3 skills</strong> to test ({selectedSkills.length}/{MAX_SKILLS} selected).
                                     </p>
 
                                     {/* Select All / Clear All */}
@@ -334,10 +338,12 @@ export default function QuizPortal() {
                                     <div className="skill-picker-grid">
                                         {extractedSkills.map(skill => {
                                             const checked = selectedSkills.includes(skill);
+                                            const atCap = selectedSkills.length >= MAX_SKILLS && !checked;
                                             return (
                                                 <button
                                                     key={skill}
-                                                    className={`skill-chip extracted${checked ? ' selected' : ''}`}
+                                                    className={`skill-chip extracted${checked ? ' selected' : ''}${atCap ? ' disabled' : ''}`}
+                                                    disabled={atCap}
                                                     onClick={() => toggleSkill(skill)}
                                                     aria-pressed={checked}
                                                 >
