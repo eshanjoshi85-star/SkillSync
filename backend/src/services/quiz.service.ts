@@ -92,26 +92,38 @@ function extractRetryDelayMs(err: any): number | null {
 }
 
 async function geminiGenerateWithRetry(
-    model: ReturnType<typeof genAI.getGenerativeModel>,
+    modelNames: string[],
     prompt: string,
     maxRetries = 2
 ) {
-    let attempt = 0;
-    while (true) {
-        try {
-            return await model.generateContent(prompt);
-        } catch (err: any) {
-            const status = err?.status ?? err?.response?.status;
-            if (status === 429 && attempt < maxRetries) {
-                const retryMs = extractRetryDelayMs(err) ?? (2 ** attempt) * 2000;
-                console.warn(`Gemini 429 hit. Retrying in ${Math.ceil(retryMs / 1000)}s... (attempt ${attempt + 1}/${maxRetries})`);
-                await sleep(retryMs);
-                attempt++;
-                continue;
+    for (let m = 0; m < modelNames.length; m++) {
+        const modelName = modelNames[m];
+        const model = genAI.getGenerativeModel({ model: modelName });
+        let attempt = 0;
+        while (true) {
+            try {
+                console.log(`Gemini: using model=${modelName}`);
+                return await model.generateContent(prompt);
+            } catch (err: any) {
+                const status = err?.status ?? err?.response?.status;
+                if (status === 429 && attempt < maxRetries) {
+                    const retryMs = extractRetryDelayMs(err) ?? (2 ** attempt) * 2000;
+                    console.warn(`Gemini 429 on ${modelName}. Retrying in ${Math.ceil(retryMs / 1000)}s... (attempt ${attempt + 1}/${maxRetries})`);
+                    await sleep(retryMs);
+                    attempt++;
+                    continue;
+                }
+                // On 429 exhausted, try next model in list
+                if (status === 429 && m < modelNames.length - 1) {
+                    console.warn(`Gemini 429 exhausted retries on ${modelName}. Falling back to ${modelNames[m + 1]}...`);
+                    break; // break inner while → next model
+                }
+                throw err;
             }
-            throw err;
         }
     }
+    // Should never reach here — last model always throws
+    throw new Error("All Gemini models exhausted");
 }
 
 /**
@@ -131,7 +143,11 @@ export async function generateQuizQuestions(
         throw new Error(`Please select up to ${MAX_SKILLS} skills to generate the quiz.`);
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // Primary model from env (default: gemini-2.5-flash); fallback: gemini-2.5-flash-lite
+    const primaryModel = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+    const modelNames = [primaryModel, "gemini-2.5-flash-lite"].filter(
+        (m, i, arr) => arr.indexOf(m) === i  // deduplicate if env already set to lite
+    );
     const totalQuestions = skills.length * 5;
 
     const prompt = `You are an expert technical assessor.
@@ -163,7 +179,7 @@ Rules:
 - Vary the correct answer positions
 - Do not add any text outside the JSON array`;
 
-    const result = await geminiGenerateWithRetry(model, prompt, 2);
+    const result = await geminiGenerateWithRetry(modelNames, prompt, 2);
     const text = result.response.text().trim();
 
     const jsonStr = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
