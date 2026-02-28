@@ -47,6 +47,7 @@ export default function QuizPortal() {
     const [step, setStep] = useState<Step>('upload');
     const [resumeFile, setResumeFile] = useState<File | null>(null);
     const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+    const [extractedSkills, setExtractedSkills] = useState<string[]>([]);
     const [questions, setQuestions] = useState<QuizQuestion[]>([]);
     const [answers, setAnswers] = useState<Record<string, number>>({});
     const [current, setCurrent] = useState(0);
@@ -55,6 +56,37 @@ export default function QuizPortal() {
     const [error, setError] = useState('');
     const [violation, setViolation] = useState({ count: 0, blocked: false, unlocksAt: null as string | null });
     const [warningVisible, setWarningVisible] = useState(false);
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] ?? null;
+        setResumeFile(file);
+        if (!file) {
+            setExtractedSkills([]);
+            setSelectedSkills([]);
+            return;
+        }
+
+        setLoading(true);
+        setError('');
+        try {
+            const form = new FormData();
+            form.append('resume', file);
+            const res = await fetch(`${API_BASE}/quiz/extract-skills`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+                body: form,
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to extract skills');
+
+            setExtractedSkills(data.skills || []);
+            setSelectedSkills(data.skills ? data.skills.slice(0, 2) : []);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleViolation = useCallback((count: number, blocked: boolean, unlocksAt: string | null) => {
         setViolation({ count, blocked, unlocksAt });
@@ -187,7 +219,7 @@ export default function QuizPortal() {
                                     type="file"
                                     accept=".pdf"
                                     style={{ display: 'none' }}
-                                    onChange={e => setResumeFile(e.target.files?.[0] ?? null)}
+                                    onChange={handleFileUpload}
                                 />
                                 {resumeFile ? (
                                     <>
@@ -203,25 +235,29 @@ export default function QuizPortal() {
                                 )}
                             </div>
 
-                            <div className="skill-picker-label">Select 1 or 2 skills to be tested on:</div>
-                            <div className="skill-picker-grid">
-                                {SKILL_OPTIONS.map(skill => (
-                                    <button
-                                        key={skill}
-                                        className={`skill-chip ${selectedSkills.includes(skill) ? 'selected' : ''} ${selectedSkills.length >= 2 && !selectedSkills.includes(skill) ? 'disabled' : ''}`}
-                                        onClick={() => toggleSkill(skill)}
-                                    >
-                                        {skill}
-                                        {selectedSkills.includes(skill) && <span className="skill-check">✓</span>}
-                                    </button>
-                                ))}
-                            </div>
-                            {selectedSkills.length > 0 && (
-                                <div className="selected-skills-summary">
-                                    {selectedSkills.length === 1
-                                        ? '5 questions will be generated (3 Medium + 2 Hard)'
-                                        : '10 questions will be generated (4 Medium + 6 Hard)'}
-                                </div>
+                            {resumeFile && (
+                                <>
+                                    <div className="skill-picker-label">Select 1 or 2 skills to be tested on (auto-extracted from resume):</div>
+                                    <div className="skill-picker-grid">
+                                        {Array.from(new Set([...extractedSkills, ...SKILL_OPTIONS])).map(skill => (
+                                            <button
+                                                key={skill}
+                                                className={`skill-chip ${selectedSkills.includes(skill) ? 'selected' : ''} ${selectedSkills.length >= 2 && !selectedSkills.includes(skill) ? 'disabled' : ''} ${extractedSkills.includes(skill) ? 'extracted' : ''}`}
+                                                onClick={() => toggleSkill(skill)}
+                                            >
+                                                {skill}
+                                                {selectedSkills.includes(skill) && <span className="skill-check">✓</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {selectedSkills.length > 0 && (
+                                        <div className="selected-skills-summary">
+                                            {selectedSkills.length === 1
+                                                ? '5 questions will be generated (3 Medium + 2 Hard)'
+                                                : '10 questions will be generated (4 Medium + 6 Hard)'}
+                                        </div>
+                                    )}
+                                </>
                             )}
 
                             {error && <div className="quiz-error">{error}</div>}

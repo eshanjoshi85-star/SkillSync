@@ -5,6 +5,7 @@ import { checkNotBlocked } from "../middleware/checkNotBlocked";
 import { prisma } from "../lib/prisma";
 import {
     extractTextFromResume,
+    extractSkills,
     generateQuizQuestions,
     saveQuizAttempt,
     QuizQuestion,
@@ -12,6 +13,30 @@ import {
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+// POST /api/quiz/extract-skills
+// Upload a resume PDF and automatically extract matching skills
+router.post(
+    "/extract-skills",
+    authenticate,
+    checkNotBlocked,
+    upload.single("resume"),
+    async (req: AuthRequest, res: Response): Promise<void> => {
+        try {
+            if (!req.file) {
+                res.status(400).json({ error: "Resume PDF is required" });
+                return;
+            }
+            const resumeText = await extractTextFromResume(req.file.buffer);
+            const skills = extractSkills(resumeText);
+
+            res.json({ skills });
+        } catch (err: any) {
+            console.error("Skill extraction error:", err);
+            res.status(500).json({ error: err.message || "Failed to extract skills" });
+        }
+    }
+);
 
 // POST /api/quiz/generate
 // Upload a resume PDF and select 1–2 skills to receive generated questions

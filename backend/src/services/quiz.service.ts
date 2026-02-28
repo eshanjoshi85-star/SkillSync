@@ -25,6 +25,19 @@ export async function extractTextFromResume(dataBuffer: Buffer): Promise<string>
     return data.text.trim();
 }
 
+/** Extract common developer skills from text */
+export function extractSkills(pdfText: string): string[] {
+    const keywords = [
+        "Java", "Spring", "Spring Boot", "JDBC", "Hibernate",
+        "React", "Node.js", "Express", "TypeScript", "JavaScript",
+        "Python", "SQL", "PostgreSQL", "MongoDB", "AWS", "Docker",
+        "Kubernetes", "Git", "REST API", "GraphQL", "C++", "C#", "Go", "Rust",
+        "Machine Learning", "Data Structures", "System Design"
+    ];
+    const uppercaseText = pdfText.toUpperCase();
+    return keywords.filter(k => uppercaseText.includes(k.toUpperCase()));
+}
+
 /**
  * Use Gemini 1.5 Flash to generate quiz questions.
  * 1 skill  → 5 Qs (3 Medium, 2 Hard)
