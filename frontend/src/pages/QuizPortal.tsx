@@ -1,9 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import LockdownWrapper from '../components/LockdownWrapper';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+// Strip trailing slash so we never double-slash when appending paths.
+// VITE_API_URL should be set to something like https://skillsync.onrender.com/api
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:4000/api').replace(/\/$/, '');
 
 interface QuizQuestion {
     id: string;
@@ -27,13 +29,15 @@ interface QuizResult {
     }>;
 }
 
-type Step = 'upload' | 'quiz' | 'result' | 'blocked';
-
-const SKILL_OPTIONS = [
-    'JavaScript', 'TypeScript', 'Python', 'React', 'Node.js',
-    'SQL', 'Machine Learning', 'Data Structures', 'System Design', 'Kubernetes',
-    'Docker', 'AWS', 'GraphQL', 'Rust', 'Go',
-];
+/** Steps:
+ *  upload  → user picks a PDF and clicks "Extract Skills"
+ *  skills  → user sees checkboxes, picks skills, clicks "Generate Quiz"
+ *  ready   → summary screen; "Start Quiz" triggers fullscreen + transitions to quiz
+ *  quiz    → active quiz in lockdown mode
+ *  result  → score table
+ *  blocked → violation block screen
+ */
+type Step = 'upload' | 'skills' | 'ready' | 'quiz' | 'result' | 'blocked';
 
 const DIFFICULTY_COLORS: Record<string, string> = {
     MEDIUM: 'text-amber-400 bg-amber-400/10',
@@ -44,10 +48,12 @@ export default function QuizPortal() {
     const { token } = useAuth();
     const navigate = useNavigate();
 
+    // ── state ─────────────────────────────────────────────────────────────────
     const [step, setStep] = useState<Step>('upload');
     const [resumeFile, setResumeFile] = useState<File | null>(null);
-    const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
     const [extractedSkills, setExtractedSkills] = useState<string[]>([]);
+    const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+    const [manualSkills, setManualSkills] = useState('');   // fallback when nothing extracted
     const [questions, setQuestions] = useState<QuizQuestion[]>([]);
     const [answers, setAnswers] = useState<Record<string, number>>({});
     const [current, setCurrent] = useState(0);
@@ -57,20 +63,41 @@ export default function QuizPortal() {
     const [violation, setViolation] = useState({ count: 0, blocked: false, unlocksAt: null as string | null });
     const [warningVisible, setWarningVisible] = useState(false);
 
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0] ?? null;
-        setResumeFile(file);
-        if (!file) {
-            setExtractedSkills([]);
-            setSelectedSkills([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    const handleViolation = useCallback((count: number, blocked: boolean, unlocksAt: string | null) => {
+        setViolation({ count, blocked, unlocksAt });
+        setWarningVisible(true);
+        setTimeout(() => setWarningVisible(false), 4000);
+        if (blocked && unlocksAt) setStep('blocked');
+    }, []);
+
+    const toggleSkill = (skill: string) => {
+        setSelectedSkills(prev =>
+            prev.includes(skill) ? prev.filter(s => s !== skill) : [...prev, skill]
+        );
+    };
+
+    const selectAll = () => setSelectedSkills([...extractedSkills]);
+    const clearAll = () => setSelectedSkills([]);
+
+    // Effective skills: from checkboxes OR from manual comma-input fallback
+    const effectiveSkills = extractedSkills.length > 0
+        ? selectedSkills
+        : manualSkills.split(',').map(s => s.trim()).filter(Boolean);
+
+    // ── Step 1: Extract Skills from PDF ──────────────────────────────────────
+    const handleExtractSkills = async () => {
+        if (!resumeFile) {
+            setError('Please select a PDF resume first.');
             return;
         }
-
-        setLoading(true);
         setError('');
+        setLoading(true);
         try {
             const form = new FormData();
-            form.append('resume', file);
+            form.append('resume', resumeFile);
             const res = await fetch(`${API_BASE}/quiz/extract-skills`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}` },
@@ -79,8 +106,10 @@ export default function QuizPortal() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Failed to extract skills');
 
-            setExtractedSkills(data.skills || []);
-            setSelectedSkills(data.skills ? data.skills.slice(0, 2) : []);
+            const skills: string[] = data.skills || [];
+            setExtractedSkills(skills);
+            setSelectedSkills(skills); // default: all selected
+            setStep('skills');
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -88,47 +117,23 @@ export default function QuizPortal() {
         }
     };
 
-    const handleViolation = useCallback((count: number, blocked: boolean, unlocksAt: string | null) => {
-        setViolation({ count, blocked, unlocksAt });
-        setWarningVisible(true);
-        setTimeout(() => setWarningVisible(false), 4000);
-        if (blocked && unlocksAt) {
-            setStep('blocked');
-        }
-    }, []);
-
-    const toggleSkill = (skill: string) => {
-        setSelectedSkills(prev => {
-            if (prev.includes(skill)) return prev.filter(s => s !== skill);
-            if (prev.length >= 2) return prev;
-            return [...prev, skill];
-        });
-    };
-
+    // ── Step 2: Generate Quiz from selected skills ────────────────────────────
     const handleGenerate = async () => {
-        if (!resumeFile || selectedSkills.length === 0) {
-            setError('Please upload your resume and select at least 1 skill.');
+        const skills = effectiveSkills;
+        if (skills.length === 0) {
+            setError('Select at least one skill to generate a quiz.');
             return;
         }
-
-        // Fullscreen on user gesture (only here, never on mount)
-        const el = document.documentElement;
-        if (el.requestFullscreen) {
-            el.requestFullscreen().catch((err) => console.error('Fullscreen error:', err));
-        }
-
         setError('');
         setLoading(true);
-
         try {
-            const form = new FormData();
-            form.append('resume', resumeFile);
-            form.append('skills', JSON.stringify(selectedSkills));
-
             const res = await fetch(`${API_BASE}/quiz/generate`, {
                 method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-                body: form,
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ skills }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Failed to generate quiz');
@@ -136,14 +141,25 @@ export default function QuizPortal() {
             setQuestions(data.questions);
             setAnswers({});
             setCurrent(0);
-            setStep('quiz');
-        } catch (e: any) {
-            setError(e.message);
+            setStep('ready');
+        } catch (err: any) {
+            setError(err.message);
         } finally {
             setLoading(false);
         }
     };
 
+    // ── Step 3: Start Quiz (fullscreen ONLY here) ─────────────────────────────
+    const handleStartQuiz = () => {
+        // requestFullscreen must be called directly inside a user-gesture handler
+        const el = document.documentElement;
+        if (el.requestFullscreen) {
+            el.requestFullscreen().catch(err => console.warn('Fullscreen request failed:', err));
+        }
+        setStep('quiz');
+    };
+
+    // ── Quiz: answer / submit ──────────────────────────────────────────────────
     const handleAnswer = (questionId: string, idx: number) => {
         setAnswers(prev => ({ ...prev, [questionId]: idx }));
     };
@@ -155,14 +171,14 @@ export default function QuizPortal() {
             const res = await fetch(`${API_BASE}/quiz/submit`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ skills: selectedSkills, questions, answers }),
+                body: JSON.stringify({ skills: effectiveSkills, questions, answers }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Failed to submit quiz');
             setResult(data);
             setStep('result');
-        } catch (e: any) {
-            setError(e.message);
+        } catch (err: any) {
+            setError(err.message);
         } finally {
             setLoading(false);
         }
@@ -171,17 +187,33 @@ export default function QuizPortal() {
     const answeredCount = Object.keys(answers).length;
     const pct = questions.length > 0 ? Math.round((answeredCount / questions.length) * 100) : 0;
 
+    const resetAll = () => {
+        setStep('upload');
+        setResumeFile(null);
+        setExtractedSkills([]);
+        setSelectedSkills([]);
+        setManualSkills('');
+        setQuestions([]);
+        setAnswers({});
+        setResult(null);
+        setError('');
+    };
+
     return (
-        <LockdownWrapper isActive={step === 'quiz'} onViolation={handleViolation} onBlocked={(u) => setViolation(v => ({ ...v, blocked: true, unlocksAt: u }))}>
+        <LockdownWrapper
+            isActive={step === 'quiz'}
+            onViolation={handleViolation}
+            onBlocked={(u) => setViolation(v => ({ ...v, blocked: true, unlocksAt: u }))}
+        >
             <div className="quiz-portal-root">
-                {/* Violation Warning Toast */}
+                {/* ── Violation Toast ── */}
                 {warningVisible && !violation.blocked && (
                     <div className="violation-toast">
                         <span>⚠️ Tab switch detected! Violation {violation.count}/3</span>
                     </div>
                 )}
 
-                {/* Header Bar */}
+                {/* ── Header ── */}
                 <header className="quiz-header">
                     <div className="quiz-header-inner">
                         <div className="quiz-logo">
@@ -196,30 +228,57 @@ export default function QuizPortal() {
                                 </div>
                             </div>
                         )}
+                        {/* Step indicator (upload / skills / ready) */}
+                        {['upload', 'skills', 'ready'].includes(step) && (
+                            <div className="quiz-step-indicator">
+                                {['Upload', 'Skills', 'Ready'].map((label, i) => {
+                                    const steps: Step[] = ['upload', 'skills', 'ready'];
+                                    const active = steps.indexOf(step) >= i;
+                                    return (
+                                        <span key={label} className={`quiz-step-dot${active ? ' active' : ''}`}>
+                                            {i + 1}. {label}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        )}
                         <button className="quiz-exit-btn" onClick={() => navigate('/dashboard')}>✕ Exit</button>
                     </div>
                 </header>
 
                 <main className="quiz-main">
-                    {/* ── STEP: UPLOAD ── */}
+
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP 1: UPLOAD                                         */}
+                    {/* ────────────────────────────────────────────────────── */}
                     {step === 'upload' && (
                         <div className="quiz-card quiz-upload-card">
                             <div className="quiz-card-icon">📄</div>
                             <h1 className="quiz-card-title">Skill Assessment Quiz</h1>
-                            <p className="quiz-card-subtitle">Upload your resume and pick 1–2 skills to generate a personalized quiz powered by Gemini AI.</p>
+                            <p className="quiz-card-subtitle">
+                                Upload your resume PDF to auto-detect your tech skills, then generate a personalised quiz powered by Gemini AI.
+                            </p>
 
                             <div className="quiz-notice">
                                 <span>🔒</span>
                                 <p>This quiz runs in <strong>lockdown mode</strong>. Switching tabs or leaving fullscreen counts as a violation. 3 violations = 24-hour block.</p>
                             </div>
 
-                            <div className="upload-zone" onClick={() => document.getElementById('resume-input')?.click()}>
+                            {/* Drop zone */}
+                            <div
+                                className="upload-zone"
+                                onClick={() => fileInputRef.current?.click()}
+                            >
                                 <input
+                                    ref={fileInputRef}
                                     id="resume-input"
                                     type="file"
-                                    accept=".pdf"
+                                    accept=".pdf,application/pdf"
                                     style={{ display: 'none' }}
-                                    onChange={handleFileUpload}
+                                    onChange={e => {
+                                        setResumeFile(e.target.files?.[0] ?? null);
+                                        setError('');
+                                    }}
                                 />
                                 {resumeFile ? (
                                     <>
@@ -230,46 +289,95 @@ export default function QuizPortal() {
                                 ) : (
                                     <>
                                         <div className="upload-icon">📁</div>
-                                        <div className="upload-hint">Click to upload your resume (PDF)</div>
+                                        <div className="upload-hint">Click to upload your resume (PDF, max 5 MB)</div>
                                     </>
                                 )}
                             </div>
 
-                            {/* Skill checklist – only rendered after upload */}
-                            {resumeFile && (
+                            {error && <div className="quiz-error">{error}</div>}
+
+                            <button
+                                className="quiz-btn-primary"
+                                onClick={handleExtractSkills}
+                                disabled={loading || !resumeFile}
+                            >
+                                {loading ? <span className="quiz-spinner">⏳ Scanning resume…</span> : '🔍 Extract Skills →'}
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP 2: SKILL SELECTION                                */}
+                    {/* ────────────────────────────────────────────────────── */}
+                    {step === 'skills' && (
+                        <div className="quiz-card quiz-upload-card">
+                            <div className="quiz-card-icon">🎯</div>
+                            <h1 className="quiz-card-title">Select Skills for Your Quiz</h1>
+
+                            {extractedSkills.length > 0 ? (
                                 <>
-                                    <div className="skill-picker-label">
-                                        {loading
-                                            ? '⏳ Scanning resume…'
-                                            : extractedSkills.length > 0
-                                                ? `✅ ${extractedSkills.length} skill${extractedSkills.length > 1 ? 's' : ''} detected — select up to 2:`
-                                                : 'No skills auto-detected. Pick manually (max 2):'}
+                                    <p className="quiz-card-subtitle">
+                                        ✅ {extractedSkills.length} skill{extractedSkills.length > 1 ? 's' : ''} detected in your resume.
+                                        Select which ones to test (5 questions per skill).
+                                    </p>
+
+                                    {/* Select All / Clear All */}
+                                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                                        <button className="quiz-btn-ghost" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={selectAll}>
+                                            ☑ Select All
+                                        </button>
+                                        <button className="quiz-btn-ghost" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={clearAll}>
+                                            ☐ Clear All
+                                        </button>
                                     </div>
+
                                     <div className="skill-picker-grid">
-                                        {Array.from(new Set([...extractedSkills, ...SKILL_OPTIONS])).map(skill => {
+                                        {extractedSkills.map(skill => {
                                             const checked = selectedSkills.includes(skill);
-                                            const isExtracted = extractedSkills.includes(skill);
-                                            const disabled = !checked && selectedSkills.length >= 2;
                                             return (
                                                 <button
                                                     key={skill}
-                                                    className={`skill-chip${checked ? ' selected' : ''}${disabled ? ' disabled' : ''}${isExtracted ? ' extracted' : ''}`}
-                                                    onClick={() => !disabled && toggleSkill(skill)}
+                                                    className={`skill-chip extracted${checked ? ' selected' : ''}`}
+                                                    onClick={() => toggleSkill(skill)}
                                                     aria-pressed={checked}
-                                                    title={isExtracted ? 'Detected in your resume' : ''}
                                                 >
                                                     <span style={{ marginRight: '4px' }}>{checked ? '☑' : '☐'}</span>
                                                     {skill}
-                                                    {isExtracted && <span className="skill-check" title="From resume">★</span>}
+                                                    <span className="skill-check" title="From resume">★</span>
                                                 </button>
                                             );
                                         })}
                                     </div>
+
                                     {selectedSkills.length > 0 && (
                                         <div className="selected-skills-summary">
-                                            {selectedSkills.length === 1
-                                                ? '5 questions will be generated (3 Medium + 2 Hard)'
-                                                : '10 questions will be generated (4 Medium + 6 Hard)'}
+                                            {selectedSkills.length} skill{selectedSkills.length > 1 ? 's' : ''} selected
+                                            → {selectedSkills.length * 5} questions will be generated
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                /* ── Fallback: no skills extracted ── */
+                                <>
+                                    <p className="quiz-card-subtitle" style={{ color: 'var(--quiz-muted)' }}>
+                                        No skills were auto-detected. Enter them manually (comma-separated):
+                                    </p>
+                                    <input
+                                        type="text"
+                                        className="quiz-manual-input"
+                                        placeholder="e.g. Java, React, SQL"
+                                        value={manualSkills}
+                                        onChange={e => setManualSkills(e.target.value)}
+                                        style={{
+                                            width: '100%', padding: '10px 14px', borderRadius: '8px',
+                                            border: '1px solid var(--quiz-border)', background: 'var(--quiz-input-bg)',
+                                            color: 'inherit', fontSize: '14px', boxSizing: 'border-box',
+                                            marginBottom: '12px',
+                                        }}
+                                    />
+                                    {effectiveSkills.length > 0 && (
+                                        <div className="selected-skills-summary">
+                                            {effectiveSkills.length} skill{effectiveSkills.length > 1 ? 's' : ''} → {effectiveSkills.length * 5} questions
                                         </div>
                                     )}
                                 </>
@@ -277,23 +385,73 @@ export default function QuizPortal() {
 
                             {error && <div className="quiz-error">{error}</div>}
 
-                            <button
-                                className="quiz-btn-primary"
-                                onClick={handleGenerate}
-                                disabled={loading || !resumeFile || selectedSkills.length === 0}
-                            >
-                                {loading ? (
-                                    <span className="quiz-spinner">⏳ {resumeFile && extractedSkills.length === 0 ? 'Scanning resume...' : 'Generating quiz...'}</span>
-                                ) : (
-                                    selectedSkills.length === 0
-                                        ? '📋 Upload resume to pick skills'
-                                        : `🚀 Start Quiz (${selectedSkills.join(', ')})`
-                                )}
-                            </button>
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                                <button className="quiz-btn-ghost" onClick={() => setStep('upload')}>
+                                    ← Back
+                                </button>
+                                <button
+                                    className="quiz-btn-primary"
+                                    style={{ flex: 1 }}
+                                    onClick={handleGenerate}
+                                    disabled={loading || effectiveSkills.length === 0}
+                                >
+                                    {loading
+                                        ? <span className="quiz-spinner">⏳ Generating quiz…</span>
+                                        : `🚀 Generate Quiz (${effectiveSkills.length} skill${effectiveSkills.length !== 1 ? 's' : ''})`
+                                    }
+                                </button>
+                            </div>
                         </div>
                     )}
 
-                    {/* ── STEP: QUIZ ── */}
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP 3: READY TO START                                 */}
+                    {/* ────────────────────────────────────────────────────── */}
+                    {step === 'ready' && (
+                        <div className="quiz-card quiz-upload-card" style={{ textAlign: 'center' }}>
+                            <div className="quiz-card-icon">🏁</div>
+                            <h1 className="quiz-card-title">Quiz Ready!</h1>
+                            <p className="quiz-card-subtitle">
+                                {questions.length} question{questions.length !== 1 ? 's' : ''} across&nbsp;
+                                <strong>{effectiveSkills.join(', ')}</strong>
+                            </p>
+
+                            <div className="quiz-notice" style={{ marginBottom: '24px' }}>
+                                <span>⚠️</span>
+                                <p>
+                                    The quiz will open in <strong>fullscreen lockdown mode</strong>.
+                                    Switching tabs or exiting fullscreen counts as a violation.
+                                </p>
+                            </div>
+
+                            {/* Summary chips */}
+                            <div className="skill-picker-grid" style={{ justifyContent: 'center', marginBottom: '20px' }}>
+                                {effectiveSkills.map(skill => (
+                                    <span key={skill} className="skill-chip selected" style={{ cursor: 'default' }}>
+                                        {skill}
+                                    </span>
+                                ))}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <button className="quiz-btn-ghost" onClick={() => setStep('skills')}>
+                                    ← Change Skills
+                                </button>
+                                {/* ONLY place we call requestFullscreen() */}
+                                <button
+                                    className="quiz-btn-primary"
+                                    style={{ flex: 1 }}
+                                    onClick={handleStartQuiz}
+                                >
+                                    🎯 Start Quiz
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP 4: QUIZ (lockdown active)                         */}
+                    {/* ────────────────────────────────────────────────────── */}
                     {step === 'quiz' && questions.length > 0 && (
                         <div className="quiz-questions-layout">
                             {/* Question Navigator */}
@@ -320,7 +478,7 @@ export default function QuizPortal() {
                                     onClick={handleSubmit}
                                     disabled={loading || answeredCount === 0}
                                 >
-                                    {loading ? '⏳ Submitting...' : `Submit Quiz (${answeredCount}/${questions.length})`}
+                                    {loading ? '⏳ Submitting…' : `Submit Quiz (${answeredCount}/${questions.length})`}
                                 </button>
                                 {error && <div className="quiz-error">{error}</div>}
                             </aside>
@@ -367,7 +525,9 @@ export default function QuizPortal() {
                         </div>
                     )}
 
-                    {/* ── STEP: RESULT ── */}
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP 5: RESULT                                          */}
+                    {/* ────────────────────────────────────────────────────── */}
                     {step === 'result' && result && (
                         <div className="quiz-card quiz-result-card">
                             <div className={`result-badge ${result.passed ? 'passed' : 'failed'}`}>
@@ -379,7 +539,8 @@ export default function QuizPortal() {
                                 <span className="score-denom">/ {result.totalQuestions}</span>
                             </div>
                             <div className="result-pct">
-                                {Math.round((result.score / result.totalQuestions) * 100)}% correct · {result.passed ? 'Pass threshold: 60%' : 'Required: 60%'}
+                                {Math.round((result.score / result.totalQuestions) * 100)}% correct ·{' '}
+                                {result.passed ? 'Pass threshold: 60%' : 'Required: 60%'}
                             </div>
                             {result.passed && result.tokensEarned > 0 && (
                                 <div className="tokens-earned-badge">
@@ -402,7 +563,7 @@ export default function QuizPortal() {
                                 ))}
                             </div>
                             <div className="result-actions">
-                                <button className="quiz-btn-primary" onClick={() => { setStep('upload'); setResult(null); setQuestions([]); setAnswers({}); setSelectedSkills([]); setResumeFile(null); }}>
+                                <button className="quiz-btn-primary" onClick={resetAll}>
                                     🔄 Take Another Quiz
                                 </button>
                                 <button className="quiz-btn-ghost" onClick={() => navigate('/dashboard')}>
@@ -412,7 +573,9 @@ export default function QuizPortal() {
                         </div>
                     )}
 
-                    {/* ── STEP: BLOCKED ── */}
+                    {/* ────────────────────────────────────────────────────── */}
+                    {/* STEP: BLOCKED                                           */}
+                    {/* ────────────────────────────────────────────────────── */}
                     {step === 'blocked' && (
                         <div className="quiz-card quiz-blocked-card">
                             <div className="blocked-icon">🔒</div>
@@ -431,6 +594,7 @@ export default function QuizPortal() {
                             </button>
                         </div>
                     )}
+
                 </main>
             </div>
         </LockdownWrapper>

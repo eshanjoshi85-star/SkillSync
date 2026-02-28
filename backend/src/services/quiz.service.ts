@@ -1,5 +1,11 @@
+// pdf-parse is a CommonJS module; guard against esModuleInterop wrapping it under .default
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdf = require('pdf-parse');
+const _pdfParseRaw = require("pdf-parse");
+// Some bundler/CJS interop scenarios wrap the function under .default
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pdfParse: (buf: Buffer) => Promise<{ text: string }> =
+    typeof _pdfParseRaw === "function" ? _pdfParseRaw : _pdfParseRaw?.default;
+
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "../lib/prisma";
 
@@ -21,72 +27,41 @@ export interface GeneratedQuiz {
 
 /** Extract plain text from a PDF buffer using pdf-parse */
 export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
-    // @ts-ignore
-    const data = await pdf(dataBuffer);
-    return data.text.trim();
-}
-
-/** Extract common developer skills from text */
-export function extractSkills(pdfText: string): string[] {
-    const keywords = [
-        // Languages
-        "Java", "Python", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
-        "Kotlin", "Swift", "Ruby", "PHP", "Scala",
-        // Frameworks / Libraries
-        "Spring", "Spring Boot", "Hibernate", "React", "Node.js", "Express",
-        "Angular", "Vue", "Django", "Flask", "FastAPI",
-        // Databases
-        "JDBC", "SQL", "PostgreSQL", "MySQL", "MongoDB", "Redis", "Oracle",
-        // Cloud / DevOps
-        "AWS", "Docker", "Kubernetes", "CI/CD", "Jenkins", "GitHub Actions",
-        // CS Concepts
-        "Data Structures", "Algorithms", "OS", "Operating Systems",
-        "System Design", "Computer Networks", "DBMS",
-        // APIs / Other
-        "REST API", "GraphQL", "Git", "Machine Learning", "Deep Learning",
-    ];
-    const upper = pdfText.toUpperCase();
-    return keywords.filter(k => upper.includes(k.toUpperCase()));
+    if (!pdfParse || typeof pdfParse !== "function") {
+        throw new Error("pdf-parse is not loaded correctly – check the install");
+    }
+    try {
+        const data = await pdfParse(dataBuffer);
+        return data?.text?.trim() ?? "";
+    } catch (err) {
+        console.error("pdf-parse error:", err);
+        throw new Error("Failed to parse PDF. Please upload a valid, non-encrypted PDF file.");
+    }
 }
 
 /**
- * Use Gemini 1.5 Flash to generate quiz questions.
- * 1 skill  → 5 Qs (3 Medium, 2 Hard)
- * 2 skills → 10 Qs per pair: 4 Medium + 6 Hard split across skills
+ * Generate quiz questions for any non-empty set of skills.
+ * Each skill gets 5 questions (3 Medium + 2 Hard).
  */
 export async function generateQuizQuestions(
     skills: string[],
-    resumeText: string
+    resumeText?: string
 ): Promise<QuizQuestion[]> {
-    if (skills.length < 1 || skills.length > 2) {
-        throw new Error("You must select 1 or 2 skills for the quiz.");
+    if (!skills.length) {
+        throw new Error("At least one skill must be selected.");
     }
 
-    const questionsPerSkill: Array<{ skill: string; medium: number; hard: number }> =
-        skills.length === 1
-            ? [{ skill: skills[0], medium: 3, hard: 2 }]
-            : [
-                { skill: skills[0], medium: 2, hard: 3 },
-                { skill: skills[1], medium: 2, hard: 3 },
-            ];
-
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
     const allQuestions: QuizQuestion[] = [];
     let questionCounter = 1;
 
-    for (const { skill, medium, hard } of questionsPerSkill) {
+    for (const skill of skills) {
         const prompt = `You are an expert technical assessor for the skill: "${skill}".
 
-Based on the candidate's resume context below, generate ${medium + hard} multiple-choice questions:
-- ${medium} questions at MEDIUM difficulty
-- ${hard} questions at HARD difficulty
-
-Resume context:
-"""
-${resumeText.slice(0, 3000)}
-"""
-
+Generate 5 multiple-choice questions:
+- 3 questions at MEDIUM difficulty
+- 2 questions at HARD difficulty
+${resumeText ? `\nResume context (use to personalise questions):\n"""\n${resumeText.slice(0, 2000)}\n"""\n` : ""}
 Return ONLY a valid JSON array (no markdown, no explanation) with this exact structure:
 [
   {
@@ -132,7 +107,7 @@ Rules:
 }
 
 /** Score a submitted quiz and persist the attempt.
- *  Hard-mode bonus: 2 skills selected + passed ≥ 60% → awards +2 tokens via SYSTEM_BONUS.
+ *  Hard-mode bonus: 2+ skills selected + passed ≥ 60% → awards +2 tokens via SYSTEM_BONUS.
  */
 export async function saveQuizAttempt(
     userId: string,
@@ -156,7 +131,7 @@ export async function saveQuizAttempt(
 
     const total = questions.length;
     const passed = score / total >= 0.6; // 60% pass threshold
-    const isHardMode = skills.length === 2;
+    const isHardMode = skills.length >= 2;
     const tokensEarned = passed && isHardMode ? 2 : 0;
 
     await prisma.$transaction(async (tx) => {
@@ -192,4 +167,3 @@ export async function saveQuizAttempt(
 
     return { score, totalQuestions: total, passed, tokensEarned, breakdown };
 }
-

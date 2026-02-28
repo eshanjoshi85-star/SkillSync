@@ -5,17 +5,24 @@ import { checkNotBlocked } from "../middleware/checkNotBlocked";
 import { prisma } from "../lib/prisma";
 import {
     extractTextFromResume,
-    extractSkills,
     generateQuizQuestions,
     saveQuizAttempt,
     QuizQuestion,
 } from "../services/quiz.service";
+import { extractSkillsFromText } from "../utils/extractSkills";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+// Memory storage – we only need the buffer for pdf-parse, never write to disk
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/extract-skills
-// Upload a resume PDF and automatically extract matching skills
+// Upload a resume PDF → returns matched skill keywords
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/extract-skills",
     authenticate,
@@ -27,47 +34,51 @@ router.post(
                 res.status(400).json({ error: "Resume PDF is required" });
                 return;
             }
+            if (req.file.mimetype !== "application/pdf") {
+                res.status(400).json({ error: "Only PDF files are accepted" });
+                return;
+            }
+
             const resumeText = await extractTextFromResume(req.file.buffer);
-            const skills = extractSkills(resumeText);
+            const skills = extractSkillsFromText(resumeText);
 
             res.json({ skills });
         } catch (err: any) {
             console.error("Skill extraction error:", err);
-            res.status(500).json({ error: err.message || "Failed to extract skills" });
+            // Surface user-facing parse errors as 400, otherwise 500
+            const status = err.message?.includes("valid") ? 400 : 500;
+            res.status(status).json({ error: err.message || "Failed to extract skills" });
         }
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/generate
-// Upload a resume PDF and select 1–2 skills to receive generated questions
+// Accepts JSON body: { skills: string[] }
+// Skills are pre-selected by the user after the extract-skills step.
+// No file upload needed here – skills are the source of truth.
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/generate",
     authenticate,
     checkNotBlocked,
-    upload.single("resume"),
     async (req: AuthRequest, res: Response): Promise<void> => {
         try {
-            if (!req.file) {
-                res.status(400).json({ error: "Resume PDF is required" });
+            const { skills } = req.body as { skills?: unknown };
+
+            if (!Array.isArray(skills) || skills.length === 0) {
+                res.status(400).json({ error: "skills must be a non-empty array of strings" });
                 return;
             }
 
-            const rawSkills = req.body.skills;
-            const skills: string[] = Array.isArray(rawSkills)
-                ? rawSkills
-                : typeof rawSkills === "string"
-                    ? JSON.parse(rawSkills)
-                    : [];
-
-            if (!skills.length || skills.length > 2) {
-                res.status(400).json({ error: "Select 1 or 2 skills for the quiz" });
+            const validSkills = skills.filter((s): s is string => typeof s === "string" && s.trim() !== "");
+            if (validSkills.length === 0) {
+                res.status(400).json({ error: "All provided skills were empty strings" });
                 return;
             }
 
-            const resumeText = await extractTextFromResume(req.file.buffer);
-            const questions = await generateQuizQuestions(skills, resumeText);
-
-            res.json({ questions, skills });
+            const questions = await generateQuizQuestions(validSkills);
+            res.json({ questions, skills: validSkills });
         } catch (err: any) {
             console.error("Quiz generation error:", err);
             res.status(500).json({ error: err.message || "Failed to generate quiz" });
@@ -75,8 +86,10 @@ router.post(
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/submit
 // Submit answers and persist the attempt
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/submit",
     authenticate,
@@ -103,8 +116,10 @@ router.post(
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/violation
 // Report a tab-switch / blur violation; block user if count >= 3
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/violation",
     authenticate,
