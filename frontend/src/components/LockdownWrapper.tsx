@@ -3,13 +3,14 @@ import { useAuth } from '../context/AuthContext';
 
 interface LockdownWrapperProps {
     children: React.ReactNode;
+    isActive: boolean;
     onViolation?: (count: number, blocked: boolean, unlocksAt: string | null) => void;
     onBlocked?: (unlocksAt: string) => void;
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-export default function LockdownWrapper({ children, onViolation, onBlocked }: LockdownWrapperProps) {
+export default function LockdownWrapper({ children, isActive, onViolation, onBlocked }: LockdownWrapperProps) {
     const { token } = useAuth();
     // Local count of ALL violations (including the grace-period first one)
     const localViolationCountRef = useRef(0);
@@ -36,7 +37,7 @@ export default function LockdownWrapper({ children, onViolation, onBlocked }: Lo
 
         // 2nd and 3rd violations → report to the server
         try {
-            const res = await fetch(`${API_BASE}/api/quiz/violation`, {
+            const res = await fetch(`${API_BASE}/quiz/violation`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -71,7 +72,7 @@ export default function LockdownWrapper({ children, onViolation, onBlocked }: Lo
     }, []);
 
     useEffect(() => {
-        enterFullscreen();
+        if (!isActive) return;
 
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'hidden') {

@@ -78,6 +78,13 @@ export default function QuizPortal() {
             setError('Please upload your resume and select 1–2 skills.');
             return;
         }
+
+        // Fullscreen on user gesture
+        const el = document.documentElement;
+        if (el.requestFullscreen) {
+            el.requestFullscreen().catch((err) => console.error('Fullscreen error:', err));
+        }
+
         setError('');
         setLoading(true);
 
@@ -86,7 +93,7 @@ export default function QuizPortal() {
             form.append('resume', resumeFile);
             form.append('skills', JSON.stringify(selectedSkills));
 
-            const res = await fetch(`${API_BASE}/api/quiz/generate`, {
+            const res = await fetch(`${API_BASE}/quiz/generate`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}` },
                 body: form,
@@ -113,7 +120,7 @@ export default function QuizPortal() {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${API_BASE}/api/quiz/submit`, {
+            const res = await fetch(`${API_BASE}/quiz/submit`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ skills: selectedSkills, questions, answers }),
@@ -133,7 +140,7 @@ export default function QuizPortal() {
     const pct = questions.length > 0 ? Math.round((answeredCount / questions.length) * 100) : 0;
 
     return (
-        <LockdownWrapper onViolation={handleViolation} onBlocked={(u) => setViolation(v => ({ ...v, blocked: true, unlocksAt: u }))}>
+        <LockdownWrapper isActive={step === 'quiz'} onViolation={handleViolation} onBlocked={(u) => setViolation(v => ({ ...v, blocked: true, unlocksAt: u }))}>
             <div className="quiz-portal-root">
                 {/* Violation Warning Toast */}
                 {warningVisible && !violation.blocked && (
