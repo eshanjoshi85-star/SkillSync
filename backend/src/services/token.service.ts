@@ -1,11 +1,10 @@
 import { Prisma, TransactionType } from "@prisma/client";
-import { prisma } from "../lib/prisma";
+import { prisma } from "../lib/prisma.js";
 
 const TOKEN_COST_PER_SESSION = 5;
 
 /**
  * Atomically transfers tokens from learner to teacher when a session completes.
- * All reads and writes happen in one transaction — no partial state possible.
  */
 export async function transferTokensForSession(sessionId: string): Promise<void> {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -23,19 +22,16 @@ export async function transferTokensForSession(sessionId: string): Promise<void>
 
         const amount = TOKEN_COST_PER_SESSION;
 
-        // Deduct from learner
         await tx.user.update({
             where: { id: session.learnerId },
             data: { tokenBalance: { decrement: amount } },
         });
 
-        // Add to teacher
         await tx.user.update({
             where: { id: session.teacherId },
             data: { tokenBalance: { increment: amount } },
         });
 
-        // Record transaction for learner
         await tx.tokenHistory.create({
             data: {
                 userId: session.learnerId,
@@ -45,7 +41,6 @@ export async function transferTokensForSession(sessionId: string): Promise<void>
             },
         });
 
-        // Record transaction for teacher
         await tx.tokenHistory.create({
             data: {
                 userId: session.teacherId,
@@ -55,7 +50,6 @@ export async function transferTokensForSession(sessionId: string): Promise<void>
             },
         });
 
-        // Mark session as completed and record token amount
         await tx.session.update({
             where: { id: sessionId },
             data: { status: "COMPLETED", tokensTransferred: amount, updatedAt: new Date() },
@@ -70,7 +64,7 @@ export async function refundTokensForSession(sessionId: string): Promise<void> {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const session = await tx.session.findUnique({ where: { id: sessionId } });
         if (!session) throw new Error("Session not found");
-        if (session.tokensTransferred === 0) return; // Nothing to refund
+        if (session.tokensTransferred === 0) return;
 
         await tx.user.update({
             where: { id: session.learnerId },

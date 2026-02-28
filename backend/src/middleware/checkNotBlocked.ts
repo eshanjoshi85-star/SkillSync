@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
-import { prisma } from "../lib/prisma";
-import { AuthRequest } from "./auth.middleware";
+import { prisma } from "../lib/prisma.js";
+import { AuthRequest } from "./auth.middleware.js";
 
 /**
  * Middleware: blocks users whose isBlockedUntil is in the future.

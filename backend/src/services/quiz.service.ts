@@ -1,28 +1,23 @@
 import { createRequire } from "module";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { prisma } from "../lib/prisma";
+import { prisma } from "../lib/prisma.js";
 
-// Use createRequire(import.meta.url) for ESM-safe CJS loading on Render.
-// @ts-ignore – import.meta.url is valid at runtime on Render's Node ESM environment
-const _cjsRequire = createRequire(import.meta.url);
+// createRequire(import.meta.url) — the correct ESM way to load CJS packages on Render (Node ESM).
+const require = createRequire(import.meta.url);
 
 type PdfParseFn = (buf: Buffer) => Promise<{ text?: string }>;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const _pdfParseRaw: any = _cjsRequire("pdf-parse");
+const raw: any = require("pdf-parse");
 
-// Resolve pdf-parse callable across CJS/ESM/bundler export shapes:
-// tries module itself, then .default, .pdfParse, .parse
-const pdfParse: PdfParseFn | undefined =
-    typeof _pdfParseRaw === "function"
-        ? (_pdfParseRaw as PdfParseFn)
-        : typeof _pdfParseRaw?.default === "function"
-            ? (_pdfParseRaw.default as PdfParseFn)
-            : typeof _pdfParseRaw?.pdfParse === "function"
-                ? (_pdfParseRaw.pdfParse as PdfParseFn)
-                : typeof _pdfParseRaw?.parse === "function"
-                    ? (_pdfParseRaw.parse as PdfParseFn)
-                    : undefined;
+// Resolve the callable function across all known CJS/ESM export shapes:
+//   raw itself, raw.default, raw.pdfParse, raw.parse
+const pdfParse: PdfParseFn =
+    typeof raw === "function" ? (raw as PdfParseFn) :
+        typeof raw?.default === "function" ? (raw.default as PdfParseFn) :
+            typeof raw?.pdfParse === "function" ? (raw.pdfParse as PdfParseFn) :
+                typeof raw?.parse === "function" ? (raw.parse as PdfParseFn) :
+                    (() => { throw new Error("pdf-parse failed to load"); })();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -43,12 +38,12 @@ export interface GeneratedQuiz {
 /** Extract plain text from a PDF buffer using pdf-parse */
 export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
     if (typeof pdfParse !== "function") {
-        // Log the actual export shape so Render logs reveal the right key
+        // Log actual export shape so Render logs reveal the right key if all paths failed
         console.error("pdf-parse export shape:", {
-            type: typeof _pdfParseRaw,
-            keys: _pdfParseRaw ? Object.keys(_pdfParseRaw) : null,
-            hasDefault: !!_pdfParseRaw?.default,
-            defaultType: typeof _pdfParseRaw?.default,
+            type: typeof raw,
+            keys: raw ? Object.keys(raw) : null,
+            hasDefault: !!raw?.default,
+            defaultType: typeof raw?.default,
         });
         throw new Error("pdf-parse failed to load on server runtime");
     }
@@ -104,7 +99,6 @@ Rules:
         const result = await model.generateContent(prompt);
         const text = result.response.text().trim();
 
-        // Strip markdown code fences if present
         const jsonStr = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
         const parsed: Array<{
             question: string;
@@ -129,7 +123,7 @@ Rules:
 }
 
 /** Score a submitted quiz and persist the attempt.
- *  Hard-mode bonus: 2+ skills selected + passed ≥ 60% → awards +2 tokens via SYSTEM_BONUS.
+ *  Hard-mode bonus: 2+ skills selected + passed ≥ 60% → awards +2 tokens.
  */
 export async function saveQuizAttempt(
     userId: string,
@@ -152,12 +146,11 @@ export async function saveQuizAttempt(
     });
 
     const total = questions.length;
-    const passed = score / total >= 0.6; // 60% pass threshold
+    const passed = score / total >= 0.6;
     const isHardMode = skills.length >= 2;
     const tokensEarned = passed && isHardMode ? 2 : 0;
 
     await prisma.$transaction(async (tx) => {
-        // 1. Persist attempt record
         await tx.quizAttempt.create({
             data: {
                 userId,
@@ -170,7 +163,6 @@ export async function saveQuizAttempt(
             },
         });
 
-        // 2. Award token bonus if hard-mode passed
         if (tokensEarned > 0) {
             await tx.user.update({
                 where: { id: userId },

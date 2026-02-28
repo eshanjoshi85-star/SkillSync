@@ -1,15 +1,15 @@
 import { Router, Response } from "express";
 import multer from "multer";
-import { authenticate, AuthRequest } from "../middleware/auth.middleware";
-import { checkNotBlocked } from "../middleware/checkNotBlocked";
-import { prisma } from "../lib/prisma";
+import { authenticate, AuthRequest } from "../middleware/auth.middleware.js";
+import { checkNotBlocked } from "../middleware/checkNotBlocked.js";
+import { prisma } from "../lib/prisma.js";
 import {
     extractTextFromResume,
     generateQuizQuestions,
     saveQuizAttempt,
     QuizQuestion,
-} from "../services/quiz.service";
-import { extractSkillsFromText } from "../utils/extractSkills";
+} from "../services/quiz.service.js";
+import { extractSkillsFromText } from "../utils/extractSkills.js";
 
 const router = Router();
 
@@ -45,7 +45,6 @@ router.post(
             res.json({ skills });
         } catch (err: any) {
             console.error("Skill extraction error:", err);
-            // Surface user-facing parse errors as 400, otherwise 500
             const status = err.message?.includes("valid") ? 400 : 500;
             res.status(status).json({ error: err.message || "Failed to extract skills" });
         }
@@ -55,8 +54,6 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/generate
 // Accepts JSON body: { skills: string[] }
-// Skills are pre-selected by the user after the extract-skills step.
-// No file upload needed here – skills are the source of truth.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/generate",
@@ -88,7 +85,6 @@ router.post(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/submit
-// Submit answers and persist the attempt
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/submit",
@@ -118,7 +114,6 @@ router.post(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/quiz/violation
-// Report a tab-switch / blur violation; block user if count >= 3
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/violation",

@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
-import { prisma } from "../lib/prisma";
-import { authenticate, AuthRequest } from "../middleware/auth.middleware";
+import { prisma } from "../lib/prisma.js";
+import { authenticate, AuthRequest } from "../middleware/auth.middleware.js";
 
 const router = Router();
 router.use(authenticate);
@@ -22,7 +22,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 
         const mentors = await prisma.user.findMany({
             where: {
-                id: { not: req.userId }, // Exclude current user
+                id: { not: req.userId },
                 skills: {
                     some: {
                         type: "TEACH",
@@ -46,7 +46,6 @@ router.get("/", async (req: AuthRequest, res: Response) => {
             }
         });
 
-        // Format to include a simplified isVerified flag and token cost
         const formattedMentors = mentors.map((m: any) => ({
             id: m.id,
             name: m.name,
@@ -58,7 +57,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
                 proficiencyLevel: s.proficiencyLevel
             })),
             isVerified: m.quizAttempts.length > 0,
-            tokenCost: 5 // Fixed minimum token cost per session for now
+            tokenCost: 5
         }));
 
         res.json(formattedMentors);

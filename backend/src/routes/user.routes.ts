@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
-import { prisma } from "../lib/prisma";
-import { authenticate, AuthRequest } from "../middleware/auth.middleware";
+import { prisma } from "../lib/prisma.js";
+import { authenticate, AuthRequest } from "../middleware/auth.middleware.js";
 
 const router = Router();
 router.use(authenticate);
@@ -49,7 +49,6 @@ router.post("/me/skills", async (req: AuthRequest, res: Response) => {
 // DELETE /api/users/me/skills/:id
 router.delete("/me/skills/:id", async (req: AuthRequest, res: Response) => {
     await prisma.userSkill.deleteMany({ where: { id: req.params["id"] as string, userId: req.userId } });
-
     return res.json({ message: "Skill removed" });
 });
 

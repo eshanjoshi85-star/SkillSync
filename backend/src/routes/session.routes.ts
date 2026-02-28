@@ -1,8 +1,8 @@
 import { Router, Response } from "express";
-import { prisma } from "../lib/prisma";
-import { authenticate, AuthRequest } from "../middleware/auth.middleware";
-import { transferTokensForSession, refundTokensForSession } from "../services/token.service";
-import { findMatches } from "../services/matching.service";
+import { prisma } from "../lib/prisma.js";
+import { authenticate, AuthRequest } from "../middleware/auth.middleware.js";
+import { transferTokensForSession, refundTokensForSession } from "../services/token.service.js";
+import { findMatches } from "../services/matching.service.js";
 
 const router = Router();
 router.use(authenticate);
@@ -46,7 +46,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         return res.status(400).json({ error: "You cannot schedule a session with yourself" });
     }
 
-    // Check learner has enough tokens
     const learner = await prisma.user.findUnique({ where: { id: req.userId } });
     if (!learner || learner.tokenBalance < 5) {
         return res.status(402).json({ error: "Insufficient tokens to schedule session (need 5)" });
@@ -98,9 +97,6 @@ router.patch("/:id/status", async (req: AuthRequest, res: Response) => {
             where: { id: session.id },
             data: { status, meetingLink },
         });
-
-        // Note: Tokens are not escrowed during PENDING, so no refund needed on DECLINED.
-        // If we implement escrow later, we'd refund here.
 
         return res.json(updatedSession);
     } catch (err: any) {

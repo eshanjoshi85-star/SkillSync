@@ -2,13 +2,13 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
-import "./config/passport";
+import "./config/passport.js";
 import passport from "passport";
-import authRoutes from "./routes/auth.routes";
-import userRoutes from "./routes/user.routes";
-import sessionRoutes from "./routes/session.routes";
-import quizRoutes from "./routes/quiz.routes";
-import mentorRoutes from "./routes/mentor.routes";
+import authRoutes from "./routes/auth.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import sessionRoutes from "./routes/session.routes.js";
+import quizRoutes from "./routes/quiz.routes.js";
+import mentorRoutes from "./routes/mentor.routes.js";
 
 dotenv.config();
 
