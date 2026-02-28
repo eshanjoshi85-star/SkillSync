@@ -1,56 +1,49 @@
-import { createRequire } from "module";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "../lib/prisma.js";
 
-const require = createRequire(import.meta.url);
+// ─── pdf-parse v2 lazy loader ─────────────────────────────────────────────────
+// pdf-parse v2.x exports a CLASS (PDFParse), not a callable function.
+// v1 API: await pdf(buffer)          ← does NOT exist in v2
+// v2 API: new PDFParse({data}).getText() → { text: string }
+//
+// Using dynamic import() for full ESM compatibility (works for CJS and ESM packages).
+// Nothing runs at module scope → server always starts even if pdf-parse is missing.
 
-type PdfParseFn = (buf: Buffer) => Promise<{ text?: string }>;
+type PDFParseClass = {
+    new(options: { data: Uint8Array }): { getText(): Promise<{ text: string }> };
+};
 
-// ─── Lazy pdf-parse loader ────────────────────────────────────────────────────
-// We never call require() at module scope so the server always starts, even if
-// pdf-parse is missing or shaped differently on the target platform.
+let cachedPDFParse: PDFParseClass | undefined = undefined;
 
-function resolvePdfParse(mod: any): PdfParseFn | null {
-    if (typeof mod === "function") return mod;
-    if (typeof mod?.default === "function") return mod.default;
-    if (typeof mod?.pdfParse === "function") return mod.pdfParse;
-    if (typeof mod?.parse === "function") return mod.parse;
-    return null;
-}
-
-let cachedPdfParse: PdfParseFn | null | undefined = undefined;
-
-function getPdfParse(): PdfParseFn {
-    // Return cached result (null = permanently failed)
-    if (cachedPdfParse !== undefined) {
-        if (cachedPdfParse === null) throw new Error("pdf-parse not available");
-        return cachedPdfParse;
-    }
+async function getPDFParse(): Promise<PDFParseClass> {
+    if (cachedPDFParse) return cachedPDFParse;
 
     try {
-        const mod = require("pdf-parse");
-        const fn = resolvePdfParse(mod);
+        const mod = await import("pdf-parse") as any;
 
-        if (!fn) {
-            console.error("pdf-parse loaded but export shape unexpected:", {
-                type: typeof mod,
-                keys: mod ? Object.keys(mod) : null,
-                defaultType: typeof mod?.default,
+        // pdf-parse v2 exports: { PDFParse: class }
+        const Cls: PDFParseClass =
+            typeof mod?.PDFParse === "function" ? mod.PDFParse :
+                typeof mod?.default?.PDFParse === "function" ? mod.default.PDFParse :
+                    typeof mod?.default === "function" ? mod.default :
+                        typeof mod === "function" ? mod : null;
+
+        if (!Cls) {
+            console.error("pdf-parse: could not resolve class/function from module:", {
+                keys: Object.keys(mod ?? {}),
+                defaultKeys: mod?.default ? Object.keys(mod.default) : null,
             });
-            cachedPdfParse = null;
-            throw new Error("pdf-parse export shape unexpected");
+            throw new Error("pdf-parse export shape not recognised");
         }
 
-        cachedPdfParse = fn;
-        return fn;
+        cachedPDFParse = Cls;
+        return Cls;
     } catch (e: any) {
-        console.error("pdf-parse require() failed:", e?.message ?? e);
-        cachedPdfParse = null;
-        throw new Error(
-            e?.code === "MODULE_NOT_FOUND"
-                ? "pdf-parse is not installed in backend dependencies"
-                : "pdf-parse failed to load"
-        );
+        const isNotFound = e?.code === "ERR_MODULE_NOT_FOUND" || e?.code === "MODULE_NOT_FOUND";
+        console.error("pdf-parse import failed:", e?.code ?? e?.message);
+        throw new Error(isNotFound
+            ? "pdf-parse is not installed in backend dependencies"
+            : (e?.message ?? "pdf-parse failed to load"));
     }
 }
 
@@ -70,17 +63,20 @@ export interface GeneratedQuiz {
     skills: string[];
 }
 
-/** Extract plain text from a PDF buffer using pdf-parse (lazy-loaded) */
+/** Extract plain text from a PDF buffer using pdf-parse v2 class API */
 export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
-    const pdfParse = getPdfParse(); // lazy load here, never at module scope
+    const PDFParse = await getPDFParse();
     try {
-        const data = await pdfParse(dataBuffer);
-        return (data?.text ?? "").trim();
+        const parser = new PDFParse({ data: new Uint8Array(dataBuffer) });
+        const result = await parser.getText();
+        return (result?.text ?? "").trim();
     } catch (err) {
-        console.error("pdf-parse error:", err);
+        console.error("pdf-parse getText() error:", err);
         throw new Error("Failed to parse PDF. Please upload a valid, non-encrypted PDF file.");
     }
 }
+
+
 
 /**
  * Generate quiz questions for any non-empty set of skills.
