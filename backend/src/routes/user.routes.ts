@@ -9,11 +9,23 @@ router.use(authenticate);
 router.get("/me", async (req: AuthRequest, res: Response) => {
     const user = await prisma.user.findUnique({
         where: { id: req.userId },
-        select: { id: true, email: true, name: true, bio: true, tokenBalance: true, createdAt: true },
+        select: {
+            id: true,
+            email: true,
+            name: true,
+            bio: true,
+            tokenBalance: true,
+            createdAt: true,
+            quizVerifiedSkills: {
+                select: { skill: true, verified: true, verifiedAt: true, bestScore: true, attempts: true },
+                orderBy: { updatedAt: "desc" },
+            },
+        },
     });
     if (!user) return res.status(404).json({ error: "User not found" });
     return res.json(user);
 });
+
 
 // GET /api/users/me/skills
 router.get("/me/skills", async (req: AuthRequest, res: Response) => {

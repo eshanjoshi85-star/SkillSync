@@ -238,6 +238,7 @@ export async function saveQuizAttempt(
     const tokensEarned = passed && isHardMode ? 2 : 0;
 
     await prisma.$transaction(async (tx) => {
+        // 1. Record the attempt
         await tx.quizAttempt.create({
             data: {
                 userId,
@@ -250,6 +251,7 @@ export async function saveQuizAttempt(
             },
         });
 
+        // 2. Award tokens for hard-mode pass
         if (tokensEarned > 0) {
             await tx.user.update({
                 where: { id: userId },
@@ -261,6 +263,39 @@ export async function saveQuizAttempt(
                     userId,
                     amount: tokensEarned,
                     type: "SYSTEM_BONUS",
+                },
+            });
+        }
+
+        // 3. Upsert QuizVerifiedSkill for every skill in this attempt.
+        //    We read each row first to compute the real bestScore (max), so we
+        //    never accidentally overwrite a higher historical score.
+        for (const skill of skills) {
+            const existing = await tx.quizVerifiedSkill.findUnique({
+                where: { userId_skill: { userId, skill } },
+                select: { bestScore: true, verified: true },
+            });
+
+            const newBest = Math.max(existing?.bestScore ?? 0, score);
+            // Once verified, never un-verify (a future fail must not clear it)
+            const nowVerified = passed || (existing?.verified ?? false);
+            const nowVerifiedAt = (passed && !existing?.verified) ? new Date() : undefined;
+
+            await tx.quizVerifiedSkill.upsert({
+                where: { userId_skill: { userId, skill } },
+                create: {
+                    userId,
+                    skill,
+                    verified: passed,
+                    verifiedAt: passed ? new Date() : null,
+                    bestScore: score,
+                    attempts: 1,
+                },
+                update: {
+                    verified: nowVerified,
+                    ...(nowVerifiedAt ? { verifiedAt: nowVerifiedAt } : {}),
+                    bestScore: newBest,
+                    attempts: { increment: 1 },
                 },
             });
         }

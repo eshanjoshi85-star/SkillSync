@@ -19,11 +19,12 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  skills            UserSkill[]
-  tokenHistory      TokenHistory[]
-  sessionsAsTeacher Session[]     @relation("TeacherSessions")
-  sessionsAsLearner Session[]     @relation("LearnerSessions")
-  quizAttempts      QuizAttempt[]
+  skills               UserSkill[]
+  quizVerifiedSkills   QuizVerifiedSkill[]
+  tokenHistory         TokenHistory[]
+  sessionsAsTeacher    Session[]           @relation("TeacherSessions")
+  sessionsAsLearner    Session[]           @relation("LearnerSessions")
+  quizAttempts         QuizAttempt[]
 
   @@map("users")
 }
@@ -129,4 +130,24 @@ model QuizAttempt {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("quiz_attempts")
+}
+
+/// Tracks quiz-verified skills (plain string, separate from TEACH/LEARN UserSkill system).
+/// A skill is verified when the user passes (≥60%) a quiz containing that skill.
+model QuizVerifiedSkill {
+  id         String    @id @default(cuid())
+  userId     String
+  skill      String
+  verified   Boolean   @default(false)
+  verifiedAt DateTime?
+  bestScore  Int       @default(0)
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skill])
+  @@index([userId])
+  @@map("quiz_verified_skills")
 }
