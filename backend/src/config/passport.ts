@@ -9,7 +9,7 @@ passport.use(
             clientSecret: process.env.GOOGLE_CLIENT_SECRET || "default_client_secret",
             callbackURL:
                 process.env.NODE_ENV === "production"
-                    ? "https://skillsync-api.onrender.com/api/auth/google/callback"
+                    ? "https://skillsync-p827.onrender.com/api/auth/google/callback"
                     : "http://localhost:3000/api/auth/google/callback",
         },
         async (accessToken, refreshToken, profile, done) => {

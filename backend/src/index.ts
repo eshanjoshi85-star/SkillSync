@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 4000;
 // Security & parsing
 app.use(helmet());
 const frontendUrls = process.env.NODE_ENV === "production"
-    ? ["https://skillsync.vercel.app"]
+    ? [process.env.FRONTEND_URL || "https://skillsync.vercel.app"]
     : [
         process.env.FRONTEND_URL || "http://localhost:5173",
         process.env.CLIENT_URL || "http://localhost:5173",
