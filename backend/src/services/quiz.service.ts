@@ -1,13 +1,19 @@
-// pdf-parse is a CommonJS module; guard against esModuleInterop wrapping it under .default
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _pdfParseRaw = require("pdf-parse");
-// Some bundler/CJS interop scenarios wrap the function under .default
+import { createRequire } from "module";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { prisma } from "../lib/prisma";
+
+// createRequire + __filename: loads CommonJS packages (like pdf-parse) safely.
+// __filename is always defined in CJS output produced by tsc (module: commonjs).
+// This is the correct approach for a TypeScript/CommonJS project on Render.
+const _cjsRequire = createRequire(__filename);
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _pdfParseRaw: any = _cjsRequire("pdf-parse");
+
+// Guard against CJS interop wrapping the function under .default
 const pdfParse: (buf: Buffer) => Promise<{ text: string }> =
     typeof _pdfParseRaw === "function" ? _pdfParseRaw : _pdfParseRaw?.default;
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { prisma } from "../lib/prisma";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
