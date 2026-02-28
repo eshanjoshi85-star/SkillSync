@@ -19,8 +19,9 @@ export interface GeneratedQuiz {
 }
 
 /** Extract plain text from a PDF buffer using pdf-parse */
-export async function extractTextFromResume(buffer: Buffer): Promise<string> {
-    const data = await pdf(buffer);
+export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
+    // @ts-ignore
+    const data = await pdf(dataBuffer);
     return data.text.trim();
 }
 
