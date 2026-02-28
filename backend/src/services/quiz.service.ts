@@ -1,4 +1,5 @@
-import pdf = require('pdf-parse');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdf = require('pdf-parse');
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "../lib/prisma";
 
@@ -28,14 +29,24 @@ export async function extractTextFromResume(dataBuffer: Buffer): Promise<string>
 /** Extract common developer skills from text */
 export function extractSkills(pdfText: string): string[] {
     const keywords = [
-        "Java", "Spring", "Spring Boot", "JDBC", "Hibernate",
-        "React", "Node.js", "Express", "TypeScript", "JavaScript",
-        "Python", "SQL", "PostgreSQL", "MongoDB", "AWS", "Docker",
-        "Kubernetes", "Git", "REST API", "GraphQL", "C++", "C#", "Go", "Rust",
-        "Machine Learning", "Data Structures", "System Design"
+        // Languages
+        "Java", "Python", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
+        "Kotlin", "Swift", "Ruby", "PHP", "Scala",
+        // Frameworks / Libraries
+        "Spring", "Spring Boot", "Hibernate", "React", "Node.js", "Express",
+        "Angular", "Vue", "Django", "Flask", "FastAPI",
+        // Databases
+        "JDBC", "SQL", "PostgreSQL", "MySQL", "MongoDB", "Redis", "Oracle",
+        // Cloud / DevOps
+        "AWS", "Docker", "Kubernetes", "CI/CD", "Jenkins", "GitHub Actions",
+        // CS Concepts
+        "Data Structures", "Algorithms", "OS", "Operating Systems",
+        "System Design", "Computer Networks", "DBMS",
+        // APIs / Other
+        "REST API", "GraphQL", "Git", "Machine Learning", "Deep Learning",
     ];
-    const uppercaseText = pdfText.toUpperCase();
-    return keywords.filter(k => uppercaseText.includes(k.toUpperCase()));
+    const upper = pdfText.toUpperCase();
+    return keywords.filter(k => upper.includes(k.toUpperCase()));
 }
 
 /**

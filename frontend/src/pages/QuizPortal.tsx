@@ -107,11 +107,11 @@ export default function QuizPortal() {
 
     const handleGenerate = async () => {
         if (!resumeFile || selectedSkills.length === 0) {
-            setError('Please upload your resume and select 1–2 skills.');
+            setError('Please upload your resume and select at least 1 skill.');
             return;
         }
 
-        // Fullscreen on user gesture
+        // Fullscreen on user gesture (only here, never on mount)
         const el = document.documentElement;
         if (el.requestFullscreen) {
             el.requestFullscreen().catch((err) => console.error('Fullscreen error:', err));
@@ -235,20 +235,35 @@ export default function QuizPortal() {
                                 )}
                             </div>
 
+                            {/* Skill checklist – only rendered after upload */}
                             {resumeFile && (
                                 <>
-                                    <div className="skill-picker-label">Select 1 or 2 skills to be tested on (auto-extracted from resume):</div>
+                                    <div className="skill-picker-label">
+                                        {loading
+                                            ? '⏳ Scanning resume…'
+                                            : extractedSkills.length > 0
+                                                ? `✅ ${extractedSkills.length} skill${extractedSkills.length > 1 ? 's' : ''} detected — select up to 2:`
+                                                : 'No skills auto-detected. Pick manually (max 2):'}
+                                    </div>
                                     <div className="skill-picker-grid">
-                                        {Array.from(new Set([...extractedSkills, ...SKILL_OPTIONS])).map(skill => (
-                                            <button
-                                                key={skill}
-                                                className={`skill-chip ${selectedSkills.includes(skill) ? 'selected' : ''} ${selectedSkills.length >= 2 && !selectedSkills.includes(skill) ? 'disabled' : ''} ${extractedSkills.includes(skill) ? 'extracted' : ''}`}
-                                                onClick={() => toggleSkill(skill)}
-                                            >
-                                                {skill}
-                                                {selectedSkills.includes(skill) && <span className="skill-check">✓</span>}
-                                            </button>
-                                        ))}
+                                        {Array.from(new Set([...extractedSkills, ...SKILL_OPTIONS])).map(skill => {
+                                            const checked = selectedSkills.includes(skill);
+                                            const isExtracted = extractedSkills.includes(skill);
+                                            const disabled = !checked && selectedSkills.length >= 2;
+                                            return (
+                                                <button
+                                                    key={skill}
+                                                    className={`skill-chip${checked ? ' selected' : ''}${disabled ? ' disabled' : ''}${isExtracted ? ' extracted' : ''}`}
+                                                    onClick={() => !disabled && toggleSkill(skill)}
+                                                    aria-pressed={checked}
+                                                    title={isExtracted ? 'Detected in your resume' : ''}
+                                                >
+                                                    <span style={{ marginRight: '4px' }}>{checked ? '☑' : '☐'}</span>
+                                                    {skill}
+                                                    {isExtracted && <span className="skill-check" title="From resume">★</span>}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                     {selectedSkills.length > 0 && (
                                         <div className="selected-skills-summary">
@@ -268,9 +283,11 @@ export default function QuizPortal() {
                                 disabled={loading || !resumeFile || selectedSkills.length === 0}
                             >
                                 {loading ? (
-                                    <span className="quiz-spinner">⏳ Generating quiz...</span>
+                                    <span className="quiz-spinner">⏳ {resumeFile && extractedSkills.length === 0 ? 'Scanning resume...' : 'Generating quiz...'}</span>
                                 ) : (
-                                    '🚀 Generate & Start Quiz'
+                                    selectedSkills.length === 0
+                                        ? '📋 Upload resume to pick skills'
+                                        : `🚀 Start Quiz (${selectedSkills.join(', ')})`
                                 )}
                             </button>
                         </div>
