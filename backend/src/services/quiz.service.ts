@@ -2,22 +2,57 @@ import { createRequire } from "module";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "../lib/prisma.js";
 
-// createRequire(import.meta.url) — the correct ESM way to load CJS packages on Render (Node ESM).
 const require = createRequire(import.meta.url);
 
 type PdfParseFn = (buf: Buffer) => Promise<{ text?: string }>;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const raw: any = require("pdf-parse");
+// ─── Lazy pdf-parse loader ────────────────────────────────────────────────────
+// We never call require() at module scope so the server always starts, even if
+// pdf-parse is missing or shaped differently on the target platform.
 
-// Resolve the callable function across all known CJS/ESM export shapes:
-//   raw itself, raw.default, raw.pdfParse, raw.parse
-const pdfParse: PdfParseFn =
-    typeof raw === "function" ? (raw as PdfParseFn) :
-        typeof raw?.default === "function" ? (raw.default as PdfParseFn) :
-            typeof raw?.pdfParse === "function" ? (raw.pdfParse as PdfParseFn) :
-                typeof raw?.parse === "function" ? (raw.parse as PdfParseFn) :
-                    (() => { throw new Error("pdf-parse failed to load"); })();
+function resolvePdfParse(mod: any): PdfParseFn | null {
+    if (typeof mod === "function") return mod;
+    if (typeof mod?.default === "function") return mod.default;
+    if (typeof mod?.pdfParse === "function") return mod.pdfParse;
+    if (typeof mod?.parse === "function") return mod.parse;
+    return null;
+}
+
+let cachedPdfParse: PdfParseFn | null | undefined = undefined;
+
+function getPdfParse(): PdfParseFn {
+    // Return cached result (null = permanently failed)
+    if (cachedPdfParse !== undefined) {
+        if (cachedPdfParse === null) throw new Error("pdf-parse not available");
+        return cachedPdfParse;
+    }
+
+    try {
+        const mod = require("pdf-parse");
+        const fn = resolvePdfParse(mod);
+
+        if (!fn) {
+            console.error("pdf-parse loaded but export shape unexpected:", {
+                type: typeof mod,
+                keys: mod ? Object.keys(mod) : null,
+                defaultType: typeof mod?.default,
+            });
+            cachedPdfParse = null;
+            throw new Error("pdf-parse export shape unexpected");
+        }
+
+        cachedPdfParse = fn;
+        return fn;
+    } catch (e: any) {
+        console.error("pdf-parse require() failed:", e?.message ?? e);
+        cachedPdfParse = null;
+        throw new Error(
+            e?.code === "MODULE_NOT_FOUND"
+                ? "pdf-parse is not installed in backend dependencies"
+                : "pdf-parse failed to load"
+        );
+    }
+}
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -35,18 +70,9 @@ export interface GeneratedQuiz {
     skills: string[];
 }
 
-/** Extract plain text from a PDF buffer using pdf-parse */
+/** Extract plain text from a PDF buffer using pdf-parse (lazy-loaded) */
 export async function extractTextFromResume(dataBuffer: Buffer): Promise<string> {
-    if (typeof pdfParse !== "function") {
-        // Log actual export shape so Render logs reveal the right key if all paths failed
-        console.error("pdf-parse export shape:", {
-            type: typeof raw,
-            keys: raw ? Object.keys(raw) : null,
-            hasDefault: !!raw?.default,
-            defaultType: typeof raw?.default,
-        });
-        throw new Error("pdf-parse failed to load on server runtime");
-    }
+    const pdfParse = getPdfParse(); // lazy load here, never at module scope
     try {
         const data = await pdfParse(dataBuffer);
         return (data?.text ?? "").trim();
